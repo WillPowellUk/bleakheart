@@ -60,7 +60,7 @@ async def run_ble_client(device, hrqueue):
         # Set the loop to call keyboard_handler when one line of input is
         # ready on stdin
         loop=asyncio.get_running_loop()
-        loop.add_reader(sys.stdin, keyboard_handler)
+        # loop.add_reader(sys.stdin, keyboard_handler)
         print(">>> Hit Enter to exit <<<")
         # create the heart rate object; set queue and other
         # parameters
@@ -78,7 +78,7 @@ async def run_ble_client(device, hrqueue):
         # it's easy to stop them if we want to
         if client.is_connected:
             await heartrate.stop_notify()
-        loop.remove_reader(sys.stdin)
+        # loop.remove_reader(sys.stdin)
         # signal the consumer task to quit
         hrqueue.put_nowait(('QUIT', None, None, None))
 
