@@ -101,6 +101,7 @@ async def run_consumer_task(hrqueue):
         frame = await hrqueue.get()
         if frame[0]=='QUIT':   # intercept exit signal
             break
+        
         print(frame)
 
         

@@ -11,9 +11,8 @@ Copyright (C) 2023 Fabrizio Smeraldi <fabrizio@smeraldi.net>
 import sys
 import asyncio
 from bleak import BleakScanner, BleakClient
-# Allow importing bleakheart from parent directory
-sys.path.append('../')
 from bleakheart import PolarMeasurementData 
+import csv
 
 
 async def scan():
@@ -84,22 +83,31 @@ async def run_ble_client(device, queue):
 
 
 async def run_consumer_task(queue):
-    """ This task retrieves ECG data from the queue and does 
-    all the processing. You should ensure it returns control before 
-    the next frame is received from the sensor. 
-
-    In this example, we simply prints decoded ECG data as it 
-    is received """
+    """ This task retrieves ECG data from the queue, prints it, and stores it in a CSV file. """
     print("After connecting, will print ECG data in the form")
-    print("('ECG', tstamp, [s1,S2,...,sn])")
+    print("('ECG', tstamp, [s1, S2, ..., sn])")
     print("where samples s1,...sn are in microVolt, tstamp is in ns")
     print("and it refers to the last sample sn.")
-    while True:
-        frame = await queue.get()
-        if frame[0]=='QUIT':   # intercept exit signal
-            break
-        print(frame)
 
+    # Open a CSV file to store the data
+    with open('ecg_data.csv', 'w', newline='') as file:
+        writer = csv.writer(file)
+        # Write the header row
+        writer.writerow(['Timestamp (ns)', 'ECG Sample (microVolt)'])
+
+        while True:
+            frame = await queue.get()
+            if frame[0] == 'QUIT':  # intercept exit signal
+                break
+
+            timestamp, ecg_data = frame[1], frame[2]
+            # Iterate over each ECG sample and write each one on a new row with the same timestamp
+            for i, sample in enumerate(ecg_data):
+                if i == 0:
+                    writer.writerow([timestamp, sample])
+                else:
+                    writer.writerow(['', sample])
+            print(frame)
         
 async def main():
     print("Scanning for BLE devices")
