@@ -2,13 +2,17 @@ import sys
 import asyncio
 import threading
 from bleak import BleakScanner, BleakClient
-from bleakheart.bleakheart import PolarMeasurementData
+from bleakheart.bleakheart import PolarMeasurementData, HeartRate
 import csv
+import os
 import logging
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+UNPACK = True
+INSTANT_RATE = UNPACK and True
 
 async def scan():
     """ Scan for a Polar device. """
@@ -16,8 +20,8 @@ async def scan():
         lambda dev, adv: dev.name and "polar" in dev.name.lower())
     return device
 
-async def run_ble_client(device, queue, quitclient):
-    """ Connect to the BLE server and start ECG notification. """
+async def run_ble_client(device, ecg_queue, hr_queue, quitclient):
+    """ Connect to the BLE server and start ECG and HR notifications. """
    
     def disconnected_callback(client):
         """ Called by BleakClient if the sensor disconnects """
@@ -29,12 +33,13 @@ async def run_ble_client(device, queue, quitclient):
         async with BleakClient(device, disconnected_callback=disconnected_callback) as client:
             logger.info(f"Connected: {client.is_connected}")
             await asyncio.sleep(2)  # Add a 2-second delay
-            pmd = PolarMeasurementData(client, ecg_queue=queue)
+
+            # Start ECG notification
+            pmd = PolarMeasurementData(client, ecg_queue=ecg_queue)
             settings = await pmd.available_settings('ECG')
             logger.info("Request for available ECG settings returned the following:")
             for k, v in settings.items():
                 logger.info(f"{k}:\t{v}")
-            logger.info(">>> Hit Enter to exit <<<")
             try:
                 err_code, err_msg, *_ = await pmd.start_streaming('ECG')
                 if err_code != 0:
@@ -43,54 +48,95 @@ async def run_ble_client(device, queue, quitclient):
             except Exception as e:
                 logger.error(f"Error starting ECG stream: {e}")
                 sys.exit(-1)
-           
+
+            # Start HR notification
+            heartrate = HeartRate(client, queue=hr_queue, instant_rate=INSTANT_RATE, unpack=UNPACK)
+            await heartrate.start_notify()
+
             await quitclient.wait()
+
+            # Stop streaming and notifications if still connected
             if client.is_connected:
                 await pmd.stop_streaming('ECG')
-            queue.put_nowait(('QUIT', None, None, None))
+                await heartrate.stop_notify()
+            
+            ecg_queue.put_nowait(('QUIT', None, None, None))
+            hr_queue.put_nowait(('QUIT', None, None, None))
     except Exception as e:
         logger.error(f"Error in run_ble_client: {e}")
         quitclient.set()
 
-async def run_consumer_task_ecg(queue):
-    """ Retrieve ECG data from the queue and store it in a CSV file. """
-    logger.info("After connecting, will print ECG data in the form")
-    logger.info("('ECG', tstamp, [s1, S2, ..., sn])")
-    with open('ecg_data.csv', 'w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(['Timestamp (ns)', 'ECG Sample (microVolt)'])
+async def run_consumer_task_ecg(ecg_queue, file_path):
+    """Retrieve ECG data from the queue and store it in CSV files."""
+
+    # Ensure the directory exists
+    os.makedirs(file_path, exist_ok=True)
+    
+    # Define file paths for ECG data
+    file_path_ecg = os.path.join(file_path, 'ECG.csv')
+
+    # Open the file for writing
+    with open(file_path_ecg, 'w', newline='') as ecg_file:
+        ecg_writer = csv.writer(ecg_file)
+        
         while True:
-            frame = await queue.get()
+            frame = await ecg_queue.get()
             if frame[0] == 'QUIT':
                 break
-            timestamp, ecg_data = frame[1], frame[2]
-            for i, sample in enumerate(ecg_data):
-                if i == 0:
-                    writer.writerow([timestamp, sample])
-                else:
-                    writer.writerow(['', sample])
+
+            timestamp_data, ecg_data, hr_data, acc_data = frame[1], frame[2], None, None
+            
+            # Write each ECG sample to ECG.csv
+            for sample in ecg_data:
+                ecg_writer.writerow([sample])
+
+            logger.info(frame)
+
+async def run_consumer_task_hr(hr_queue, file_path):
+    """Retrieve HR data from the queue and store it in a CSV file."""
+
+    # Define file path for HR data
+    file_path_hr = os.path.join(file_path, 'HR.csv')
+
+    # Open the file for writing
+    with open(file_path_hr, 'w', newline='') as hr_file:
+        hr_writer = csv.writer(hr_file)
+
+        while True:
+            frame = await hr_queue.get()
+            if frame[0] == 'QUIT':  # intercept exit signal
+                break
+
+            timestamp, heart_rate_data, energy = frame[1], frame[2], frame[3]
+            bpm, rr_intervals = heart_rate_data[0], heart_rate_data[1]
+            rr_intervals_str = ','.join(map(str, rr_intervals)) if isinstance(rr_intervals, list) else rr_intervals
+            hr_writer.writerow([rr_intervals_str])
             logger.info(frame)
 
 def input_thread(quitclient):
-    input()
+    input(">>> Hit Enter to exit <<<")
     quitclient.set()
     logger.info("Quitting on user command")
 
-async def main():
+async def main(file_path):
     logger.info("Scanning for BLE devices")
     device = await scan()
     if device is None:
         logger.error("Polar device not found.")
         sys.exit(-4)
-    ecgqueue = asyncio.Queue()
+    ecg_queue = asyncio.Queue()
+    hr_queue = asyncio.Queue()
     quitclient = asyncio.Event()
     input_thread_obj = threading.Thread(target=input_thread, args=(quitclient,))
     input_thread_obj.start()
-    producer = run_ble_client(device, ecgqueue, quitclient)
-    consumer = run_consumer_task_ecg(ecgqueue)
-    await asyncio.gather(producer, consumer)
+    producer = run_ble_client(device, ecg_queue, hr_queue, quitclient)
+    consumer_ecg = run_consumer_task_ecg(ecg_queue, file_path)
+    consumer_hr = run_consumer_task_hr(hr_queue, file_path)
+    await asyncio.gather(producer, consumer_ecg, consumer_hr)
     logger.info("Bye.")
     input_thread_obj.join()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    subject = 1
+    file_name = f'data_collection/recordings/S{subject}'
+    asyncio.run(main(file_name))
