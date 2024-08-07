@@ -144,10 +144,14 @@ async def run_consumer_task_acc(acc_queue, file_path):
             frame = await acc_queue.get()
             if frame[0] == 'QUIT':  # intercept exit signal
                 break
+            
+            if frame[0] != 'ACC':
+                logger.error(f"Unexpected frame type: {frame[0]}")
+                continue
 
             tstamp, acc_data = frame[1], frame[2]
-            # for sample in acc_data:
-            #     acc_writer.writerow([tstamp, *sample])
+            for sample in acc_data:
+                acc_writer.writerow([tstamp, *sample])
             logger.info(frame)
 
 def input_thread(quitclient):
