@@ -20,8 +20,8 @@ async def scan():
         lambda dev, adv: dev.name and "polar" in dev.name.lower())
     return device
 
-async def run_ble_client(device, ecg_queue, hr_queue, acc_queue, quitclient):
-    """ Connect to the BLE server and start ECG, HR, and ACC notifications. """
+async def run_ble_client(device, ecg_queue, hr_queue, quitclient):
+    """ Connect to the BLE server and start ECG and HR notifications. """
    
     def disconnected_callback(client):
         """ Called by BleakClient if the sensor disconnects """
@@ -53,32 +53,15 @@ async def run_ble_client(device, ecg_queue, hr_queue, acc_queue, quitclient):
             heartrate = HeartRate(client, queue=hr_queue, instant_rate=INSTANT_RATE, unpack=UNPACK)
             await heartrate.start_notify()
 
-            # Start ACC notification
-            acc_pmd = PolarMeasurementData(client, callback=lambda data: acc_queue.put_nowait(data))
-            settings = await acc_pmd.available_settings('ACC')
-            logger.info("Request for available ACC settings returned the following:")
-            for k, v in settings.items():
-                logger.info(f"{k}:\t{v}")
-            try:
-                err_code, err_msg, *_ = await acc_pmd.start_streaming('ACC', RANGE=2, SAMPLE_RATE=25)
-                if err_code != 0:
-                    logger.error(f"PMD returned an error: {err_msg}")
-                    sys.exit(err_code)
-            except Exception as e:
-                logger.error(f"Error starting ACC stream: {e}")
-                sys.exit(-1)
-
             await quitclient.wait()
 
             # Stop streaming and notifications if still connected
             if client.is_connected:
                 await pmd.stop_streaming('ECG')
                 await heartrate.stop_notify()
-                await acc_pmd.stop_streaming('ACC')
             
             ecg_queue.put_nowait(('QUIT', None, None, None))
             hr_queue.put_nowait(('QUIT', None, None, None))
-            acc_queue.put_nowait(('QUIT', None, None, None))
     except Exception as e:
         logger.error(f"Error in run_ble_client: {e}")
         quitclient.set()
@@ -130,26 +113,6 @@ async def run_consumer_task_hr(hr_queue, file_path):
             hr_writer.writerow([rr_intervals_str])
             logger.info(frame)
 
-async def run_consumer_task_acc(acc_queue, file_path):
-    """Retrieve ACC data from the queue and store it in a CSV file."""
-
-    # Define file path for ACC data
-    file_path_acc = os.path.join(file_path, 'ACC.csv')
-
-    # Open the file for writing
-    with open(file_path_acc, 'w', newline='') as acc_file:
-        acc_writer = csv.writer(acc_file)
-
-        while True:
-            frame = await acc_queue.get()
-            if frame[0] == 'QUIT':  # intercept exit signal
-                break
-
-            tstamp, acc_data = frame[1], frame[2]
-            # for sample in acc_data:
-            #     acc_writer.writerow([tstamp, *sample])
-            logger.info(frame)
-
 def input_thread(quitclient):
     input(">>> Hit Enter to exit <<<")
     quitclient.set()
@@ -163,15 +126,13 @@ async def main(file_path):
         sys.exit(-4)
     ecg_queue = asyncio.Queue()
     hr_queue = asyncio.Queue()
-    acc_queue = asyncio.Queue()
     quitclient = asyncio.Event()
     input_thread_obj = threading.Thread(target=input_thread, args=(quitclient,))
     input_thread_obj.start()
-    producer = run_ble_client(device, ecg_queue, hr_queue, acc_queue, quitclient)
+    producer = run_ble_client(device, ecg_queue, hr_queue, quitclient)
     consumer_ecg = run_consumer_task_ecg(ecg_queue, file_path)
     consumer_hr = run_consumer_task_hr(hr_queue, file_path)
-    consumer_acc = run_consumer_task_acc(acc_queue, file_path)
-    await asyncio.gather(producer, consumer_ecg, consumer_hr, consumer_acc)
+    await asyncio.gather(producer, consumer_ecg, consumer_hr)
     logger.info("Bye.")
     input_thread_obj.join()
 

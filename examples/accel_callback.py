@@ -56,7 +56,7 @@ async def run_ble_client(device, callback):
         # Set the loop to call keyboard_handler when one line of input is
         # ready on stdin
         loop=asyncio.get_running_loop()
-        loop.add_reader(sys.stdin, keyboard_handler)
+        # loop.add_reader(sys.stdin, keyboard_handler)
         print(">>> Hit Enter to exit <<<")        
         # start notifications; bleakheart will start sending data to
         # the callback. You can set parameters as desired - invalid
