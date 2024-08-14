@@ -146,6 +146,11 @@ def input_thread(quitclient):
     logger.info("Quitting on user command")
 
 async def main(file_path):
+    # check if file path exists
+    if os.path.exists(file_path):
+        logger.error(f"Path {file_path} already exists.")
+        sys.exit(-3)
+
     logger.info("Scanning for BLE devices")
     device = await scan()
     if device is None:
