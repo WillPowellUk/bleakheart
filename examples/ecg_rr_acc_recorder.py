@@ -147,7 +147,7 @@ def input_thread(quitclient):
 
 async def main(file_path):
     # check if file path exists
-    if os.path.exists(file_path):
+    if os.path.exists(f'{file_path}/ECG.csv'):
         logger.error(f"Path {file_path} already exists.")
         sys.exit(-3)
 
